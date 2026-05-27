@@ -1,0 +1,37 @@
+steps:
+  # Step 1: Security scan — fail the build on high/critical vulnerabilities
+  - name: "node:22-slim"
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        npm ci --ignore-scripts
+        npm audit --audit-level=high
+
+  # Step 2: Build the container image, tagged with commit SHA and :latest
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - build
+      - -t
+      - "gcr.io/$PROJECT_ID/gsheets-mcp:$SHORT_SHA"
+      - -t
+      - "gcr.io/$PROJECT_ID/gsheets-mcp:latest"
+      - .
+
+  # Step 3: Push both tags
+  - name: "gcr.io/cloud-builders/docker"
+    args: [push, "--all-tags", "gcr.io/$PROJECT_ID/gsheets-mcp"]
+
+  # Step 4: Deploy via service.yaml — use $SHORT_SHA tag so Cloud Run always
+  # sees a new image reference and creates a new revision.
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        sed -i "s|gcr.io/your-gcp-project/gsheets-mcp|gcr.io/$PROJECT_ID/gsheets-mcp:$SHORT_SHA|g" service.yaml
+        gcloud run services replace service.yaml --region us-central1 --quiet
+
+images:
+  - "gcr.io/$PROJECT_ID/gsheets-mcp:$SHORT_SHA"
+  - "gcr.io/$PROJECT_ID/gsheets-mcp:latest"

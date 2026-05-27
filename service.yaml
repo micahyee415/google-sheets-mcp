@@ -1,0 +1,69 @@
+# Cloud Run service definition for the Google Sheets MCP server.
+#
+# Single-container — per-user OAuth passthrough (no service account).
+# Every Google API call runs as the requesting @example.com user.
+# Google enforces their existing Drive/Sheets permissions on every operation.
+#
+# DEPLOY: gcloud builds submit --config cloudbuild.yaml --project your-gcp-project --substitutions=SHORT_SHA=$(git rev-parse --short HEAD)
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: gsheets-mcp
+  labels:
+    cloud.googleapis.com/location: us-central1
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "1"
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      containers:
+        - name: gsheets-mcp
+          image: gcr.io/your-gcp-project/gsheets-mcp
+          ports:
+            - name: http1
+              containerPort: 8080
+          env:
+            - name: ALLOWED_DOMAIN
+              value: "example.com"
+            - name: SERVER_URL
+              value: "https://your-service.example.com"
+            # Write access — open to all authenticated @example.com users as of v2.4.0.
+            # Per-user OAuth means Google enforces each user's own Drive/Sheets
+            # permissions on every write. No WRITE_ALLOWLIST env var needed.
+            - name: GOOGLE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: gsheets-oauth-id
+                  key: latest
+            - name: GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: gsheets-oauth-secret
+                  key: latest
+            # Bulk-write security alerting (added v2.4.0).
+            # Posts a Slack DM to BULK_WRITE_ALERT_USER_ID whenever a single write
+            # call exceeds BULK_WRITE_THRESHOLD_ROWS rows. SLACK_BOT_TOKEN is the
+            # Slack bot token — needs `chat:write` only (Slack auto-resolves
+            # user IDs to DMs).
+            - name: BULK_WRITE_THRESHOLD_ROWS
+              value: "20"
+            - name: BULK_WRITE_ALERT_USER_ID
+              value: "YOUR_SLACK_USER_ID"
+            - name: SLACK_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: slack-bot-token
+                  key: latest
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+            initialDelaySeconds: 10
+            periodSeconds: 30
